@@ -1143,7 +1143,9 @@ fn execute_agent(input: AgentInput) -> Result<AgentOutput, String> {
     let normalized_subagent_type = normalize_subagent_type(input.subagent_type.as_deref());
     let agent_name = input
         .name
-        .clone()
+        .as_deref()
+        .map(slugify_agent_name)
+        .filter(|name| !name.is_empty())
         .unwrap_or_else(|| slugify_agent_name(&input.description));
     let created_at = iso8601_now();
 
@@ -1324,6 +1326,9 @@ fn agent_store_dir() -> Result<std::path::PathBuf, String> {
         return Ok(std::path::PathBuf::from(path));
     }
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    if let Some(workspace_root) = cwd.ancestors().nth(2) {
+        return Ok(workspace_root.join(".clawd-agents"));
+    }
     Ok(cwd.join(".clawd-agents"))
 }
 
@@ -2060,6 +2065,18 @@ mod tests {
         let normalized_output: serde_json::Value =
             serde_json::from_str(&normalized).expect("valid json");
         assert_eq!(normalized_output["subagentType"], "Explore");
+
+        let named = execute_tool(
+            "Agent",
+            &json!({
+                "description": "Review the branch",
+                "prompt": "Inspect diff.",
+                "name": "Ship Audit!!!"
+            }),
+        )
+        .expect("Agent should normalize explicit names");
+        let named_output: serde_json::Value = serde_json::from_str(&named).expect("valid json");
+        assert_eq!(named_output["name"], "ship-audit");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2166,7 +2183,7 @@ mod tests {
 
     #[test]
     fn powershell_runs_via_stub_shell() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
         let dir = std::env::temp_dir().join(format!(
             "clawd-pwsh-bin-{}",
             std::time::SystemTime::now()
@@ -2220,7 +2237,7 @@ printf 'pwsh:%s' "$1"
 
     #[test]
     fn powershell_errors_when_shell_is_missing() {
-        let _guard = env_lock().lock().expect("env lock");
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
         let original_path = std::env::var("PATH").unwrap_or_default();
         let empty_dir = std::env::temp_dir().join(format!(
             "clawd-empty-bin-{}",
